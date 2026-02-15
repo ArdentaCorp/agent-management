@@ -17,8 +17,9 @@ type AIToolConfig struct {
 
 // Config represents the global skm configuration file.
 type Config struct {
-	System  string         `json:"system"`
-	AITools []AIToolConfig `json:"aiTools,omitempty"`
+	System   string         `json:"system"`
+	Registry string         `json:"registry,omitempty"`
+	AITools  []AIToolConfig `json:"aiTools,omitempty"`
 }
 
 // Manager handles configuration paths and operations.
@@ -143,4 +144,29 @@ func (m *Manager) LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// GetRegistry returns the configured registry URL, or empty string if not set.
+func (m *Manager) GetRegistry() string {
+	cfg, err := m.LoadConfig()
+	if err != nil {
+		return ""
+	}
+	return cfg.Registry
+}
+
+// SetRegistry saves the registry URL to config.
+func (m *Manager) SetRegistry(url string) error {
+	cfg, err := m.LoadConfig()
+	if err != nil {
+		cfg = &Config{System: runtime.GOOS}
+	}
+	cfg.Registry = url
+	data, _ := json.MarshalIndent(cfg, "", "  ")
+	return os.WriteFile(m.configFile, data, 0644)
+}
+
+// GetRegistryDir returns the path where the registry repo is cloned.
+func (m *Manager) GetRegistryDir() string {
+	return filepath.Join(m.homeDir, "registry")
 }

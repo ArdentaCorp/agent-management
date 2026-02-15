@@ -115,16 +115,38 @@ func (m *Manager) CloneFull(url, dest string) error {
 	return cmd.Run()
 }
 
+// CloneFullQuiet performs a full git clone with no output.
+func (m *Manager) CloneFullQuiet(url, dest string) error {
+	cmd := exec.Command("git", "clone", "--quiet", url, dest)
+	return cmd.Run()
+}
+
 // CloneSparse performs a sparse checkout of a specific subdirectory.
 func (m *Manager) CloneSparse(url, dest, subPath, branch string) error {
+	return m.cloneSparse(url, dest, subPath, branch, false)
+}
+
+// CloneSparseQuiet performs a sparse checkout with no output.
+func (m *Manager) CloneSparseQuiet(url, dest, subPath, branch string) error {
+	return m.cloneSparse(url, dest, subPath, branch, true)
+}
+
+func (m *Manager) cloneSparse(url, dest, subPath, branch string, quiet bool) error {
 	if branch == "" {
 		branch = "main"
 	}
 
 	// Clone with blob filter and no checkout
-	cmd := exec.Command("git", "clone", "--filter=blob:none", "--no-checkout", url, dest)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	args := []string{"clone", "--filter=blob:none", "--no-checkout"}
+	if quiet {
+		args = append(args, "--quiet")
+	}
+	args = append(args, url, dest)
+	cmd := exec.Command("git", args...)
+	if !quiet {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("sparse clone failed: %w", err)
 	}
@@ -144,10 +166,16 @@ func (m *Manager) CloneSparse(url, dest, subPath, branch string) error {
 	}
 
 	// Checkout branch
-	cmd = exec.Command("git", "checkout", branch)
+	args = []string{"checkout", branch}
+	if quiet {
+		args = append(args, "--quiet")
+	}
+	cmd = exec.Command("git", args...)
 	cmd.Dir = dest
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if !quiet {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("checkout %s failed: %w", branch, err)
 	}

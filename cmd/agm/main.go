@@ -25,6 +25,10 @@ func main() {
 			case "--config":
 				showConfig()
 				return
+			case "--sync":
+				fmt.Print(tui.RenderBanner(version))
+				commands.SyncSkills(false)
+				return
 			case "--help", "-h":
 				printHelp()
 				return
@@ -49,6 +53,7 @@ func printHelp() {
 	fmt.Println("Options:")
 	fmt.Println("  --version, -v  Show version number")
 	fmt.Println("  --config       Show configuration")
+	fmt.Println("  --sync         Sync skills from registry (non-interactive)")
 	fmt.Println("  --help, -h     Show this help message")
 	fmt.Println()
 	fmt.Println("Run without arguments for interactive mode.")
