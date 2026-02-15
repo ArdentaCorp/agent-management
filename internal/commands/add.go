@@ -1,0 +1,395 @@
+package commands
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/ArdentaCorp/agent-management/internal/config"
+	"github.com/ArdentaCorp/agent-management/internal/git"
+	"github.com/ArdentaCorp/agent-management/internal/project"
+	"github.com/ArdentaCorp/agent-management/internal/skills"
+	"github.com/ArdentaCorp/agent-management/internal/tui"
+	"github.com/charmbracelet/huh"
+)
+
+// AddSkills is the top-level "Add skills" flow.
+// After adding, it offers to link to a detected project immediately.
+func AddSkills() {
+	var skillType string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Where are the skills?").
+				Options(
+					huh.NewOption("🌐 GitHub Repository", "github"),
+					huh.NewOption("� Local Folder", "folder"),
+					huh.NewOption("← Cancel", "cancel"),
+				).
+				Value(&skillType),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return
+	}
+
+	var addedIDs []string
+
+	switch skillType {
+	case "github":
+		addedIDs = addGitHubSkill()
+	case "folder":
+		addedIDs = addSkillsFolder()
+	default:
+		return
+	}
+
+	if len(addedIDs) == 0 {
+		return
+	}
+
+	// Wizard: offer to link to project immediately
+	offerLinkAfterAdd(addedIDs)
+}
+
+// offerLinkAfterAdd asks if the user wants to link newly added skills to a project.
+func offerLinkAfterAdd(addedIDs []string) {
+	detector := project.NewDetector("")
+	projects := detector.DetectAll()
+	if len(projects) == 0 {
+		return
+	}
+
+	var wantLink bool
+	huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Link these skills to a project now?").
+				Affirmative("Yes").
+				Negative("Not now").
+				Value(&wantLink),
+		),
+	).Run()
+
+	if !wantLink {
+		return
+	}
+
+	// If only one tool detected, link directly
+	if len(projects) == 1 {
+		p := projects[0]
+		for _, id := range addedIDs {
+			linkSkillToProject(id, &p)
+		}
+		return
+	}
+
+	// Multiple tools — offer "All" or pick one
+	var opts []huh.Option[int]
+	opts = append(opts, huh.NewOption("🔗 All detected tools", -1))
+	for i, p := range projects {
+		opts = append(opts, huh.NewOption(p.Type, i))
+	}
+	var idx int
+	huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[int]().
+				Title("Which tool?").
+				Options(opts...).
+				Value(&idx),
+		),
+	).Run()
+
+	if idx == -1 {
+		// Link to all detected tools
+		for _, p := range projects {
+			fmt.Println(tui.RenderInfo("Linking to " + p.Type + "..."))
+			for _, id := range addedIDs {
+				linkSkillToProject(id, &p)
+			}
+		}
+	} else {
+		p := projects[idx]
+		for _, id := range addedIDs {
+			linkSkillToProject(id, &p)
+		}
+	}
+}
+
+// addGitHubSkill adds a skill from a GitHub URL. Returns added skill IDs.
+func addGitHubSkill() []string {
+	cm := config.NewManager()
+	registry := skills.NewRegistry(cm)
+	gitMgr := git.NewManager()
+
+	var repoURL string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("GitHub URL").
+				Description("Repo or subdirectory URL").
+				Placeholder("https://github.com/user/repo/tree/main/skills/...").
+				Value(&repoURL),
+		),
+	)
+	if err := form.Run(); err != nil || repoURL == "" {
+		return nil
+	}
+
+	repoURL = strings.TrimSpace(repoURL)
+	if repoURL == "" {
+		return nil
+	}
+
+	if err := gitMgr.CheckGitVersion(); err != nil {
+		fmt.Println(tui.RenderError(err.Error()))
+		return nil
+	}
+
+	gitInfo := gitMgr.NormalizeURL(repoURL)
+
+	re := regexp.MustCompile(`github\.com/([^/]+/[^/]+?)(\.git)?$`)
+	matches := re.FindStringSubmatch(gitInfo.URL)
+	if matches == nil {
+		fmt.Println(tui.RenderError("Only GitHub URLs are supported."))
+		return nil
+	}
+	userRepo := strings.TrimSuffix(matches[1], ".git")
+
+	branch := gitInfo.Branch
+	if branch == "" {
+		branch = gitMgr.GetDefaultBranch(userRepo)
+	}
+
+	fmt.Println(tui.RenderInfo("Checking for SKILL.md..."))
+	if !gitMgr.CheckRemoteSkillMd(userRepo, branch, gitInfo.Path) {
+		fmt.Println(tui.RenderError("SKILL.md not found at the specified path."))
+		return nil
+	}
+
+	id := "github:" + userRepo
+	if gitInfo.Path != "" {
+		id += "/" + gitInfo.Path
+	}
+
+	if existing := registry.GetSkill(id); existing != nil {
+		var overwrite bool
+		huh.NewForm(huh.NewGroup(
+			huh.NewConfirm().
+				Title(fmt.Sprintf("%s already exists. Overwrite?", id)).
+				Value(&overwrite),
+		)).Run()
+		if !overwrite {
+			return nil
+		}
+		os.RemoveAll(cm.GetRepoPath(id))
+	}
+
+	destPath := cm.GetRepoPath(id)
+	os.MkdirAll(filepath.Dir(destPath), 0755)
+
+	fmt.Println(tui.RenderInfo("Cloning " + id + "..."))
+
+	var err error
+	if gitInfo.Path != "" {
+		err = gitMgr.CloneSparse(gitInfo.URL, destPath, gitInfo.Path, branch)
+	} else {
+		err = gitMgr.CloneFull(gitInfo.URL, destPath)
+	}
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to clone: " + err.Error()))
+		return nil
+	}
+
+	subPath := "."
+	if gitInfo.Path != "" {
+		subPath = gitInfo.Path
+	}
+	commitID, _ := gitMgr.GetLocalPathCommitID(destPath, subPath)
+
+	registry.AddSkill(id, "github", commitID, gitInfo.Path)
+	fmt.Println(tui.RenderSuccess("Added " + id))
+	return []string{id}
+}
+
+// addSkillsFolder scans a directory and lets the user pick skills. Returns added IDs.
+func addSkillsFolder() []string {
+	cm := config.NewManager()
+	registry := skills.NewRegistry(cm)
+
+	var inputPath string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Skills folder path").
+				Description("Directory containing skill subdirectories").
+				Value(&inputPath),
+		),
+	)
+	if err := form.Run(); err != nil || inputPath == "" {
+		return nil
+	}
+
+	folderPath := resolvePath(strings.TrimSpace(inputPath))
+	if folderPath == "" {
+		return nil
+	}
+
+	dirInfo, err := os.Stat(folderPath)
+	if err != nil || !dirInfo.IsDir() {
+		fmt.Println(tui.RenderError("Path does not exist or is not a directory."))
+		return nil
+	}
+
+	entries, err := os.ReadDir(folderPath)
+	if err != nil {
+		fmt.Println(tui.RenderError("Error reading directory: " + err.Error()))
+		return nil
+	}
+
+	type skillEntry struct {
+		name string
+		path string
+	}
+	var found []skillEntry
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(folderPath, entry.Name(), "SKILL.md")); err == nil {
+			found = append(found, skillEntry{name: entry.Name(), path: filepath.Join(folderPath, entry.Name())})
+		}
+	}
+
+	if len(found) == 0 {
+		fmt.Println(tui.RenderWarning("No skills found (no subdirectories with SKILL.md)."))
+		return nil
+	}
+
+	var opts []huh.Option[string]
+	for _, s := range found {
+		id := "local:" + s.name
+		label := s.name
+		if existing := registry.GetSkill(id); existing != nil {
+			label += " " + tui.MutedText.Render("(installed)")
+		}
+		opts = append(opts, huh.NewOption(label, s.name))
+	}
+
+	var selected []string
+	huh.NewForm(huh.NewGroup(
+		huh.NewMultiSelect[string]().
+			Title(fmt.Sprintf("Found %d skills — select which to add", len(found))).
+			Options(opts...).
+			Value(&selected),
+	)).Run()
+
+	if len(selected) == 0 {
+		fmt.Println(tui.MutedText.Render("No skills selected."))
+		return nil
+	}
+
+	var addedIDs []string
+	for _, selName := range selected {
+		var match *skillEntry
+		for i := range found {
+			if found[i].name == selName {
+				match = &found[i]
+				break
+			}
+		}
+		if match == nil {
+			continue
+		}
+
+		id := "local:" + match.name
+
+		if existing := registry.GetSkill(id); existing != nil {
+			var overwrite bool
+			huh.NewForm(huh.NewGroup(
+				huh.NewConfirm().
+					Title(fmt.Sprintf("%s already exists. Overwrite?", id)).
+					Value(&overwrite),
+			)).Run()
+			if !overwrite {
+				continue
+			}
+			os.RemoveAll(cm.GetRepoPath(id))
+		}
+
+		destPath := cm.GetRepoPath(id)
+		fmt.Println(tui.RenderInfo("Copying " + match.name + "..."))
+		if err := copyDir(match.path, destPath); err != nil {
+			fmt.Println(tui.RenderError("Failed: " + match.name + ": " + err.Error()))
+			continue
+		}
+
+		registry.AddSkill(id, "local", "", "")
+		addedIDs = append(addedIDs, id)
+		fmt.Println(tui.RenderSuccess("Added " + id))
+	}
+
+	if len(addedIDs) > 0 {
+		fmt.Printf("\n%s\n", tui.RenderSuccess(fmt.Sprintf("%d skill(s) added", len(addedIDs))))
+	}
+	return addedIDs
+}
+
+// --- helpers ---
+
+func resolvePath(inputPath string) string {
+	if inputPath == "" {
+		return ""
+	}
+	if strings.HasPrefix(inputPath, "~/") {
+		home, _ := os.UserHomeDir()
+		inputPath = filepath.Join(home, inputPath[2:])
+	} else if inputPath == "~" {
+		inputPath, _ = os.UserHomeDir()
+	}
+	abs, err := filepath.Abs(inputPath)
+	if err != nil {
+		fmt.Println(tui.RenderError("Cannot resolve path: " + err.Error()))
+		return ""
+	}
+	return abs
+}
+
+func copyDir(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			data, err := os.ReadFile(srcPath)
+			if err != nil {
+				return err
+			}
+			info, _ := entry.Info()
+			if err := os.WriteFile(dstPath, data, info.Mode()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

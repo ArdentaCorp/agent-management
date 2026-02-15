@@ -1,0 +1,4 @@
+interface:
+  display_name: "Figma MCP"
+  short_description: "Use Figma MCP for design inspection and handoff"
+  default_prompt: "Use Figma MCP to inspect designs and produce implementation-ready outputs."

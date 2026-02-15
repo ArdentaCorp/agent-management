@@ -1,0 +1,40 @@
+# Go binaries
+/skm
+/skm.exe
+/agm
+/agm.exe
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+vendor/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+
+# Env files
+.env
+.env.*.local
+
+# Misc
+*.orig
+*.bak
+.sisyphus
+.opencode
+AGENTS.md
