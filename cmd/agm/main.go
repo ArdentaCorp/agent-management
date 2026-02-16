@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/huh"
 )
 
-const version = "1.0.0"
+const version = "1.0.2"
 
 func main() {
 	args := os.Args[1:]
@@ -60,7 +60,11 @@ func printHelp() {
 }
 
 func showConfig() {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, tui.RenderError("Failed to initialize config: "+err.Error()))
+		return
+	}
 	fmt.Println(tui.RenderBanner(version))
 	fmt.Println(tui.RenderInfo("Config directory: " + cm.GetHomeDir()))
 

@@ -80,6 +80,7 @@ Sync will:
 - Add any new skills
 - Update changed skills
 - Remove skills that were deleted from the registry
+- Replace duplicate same-name skills from other sources (`github:*`, `local:*`) with the registry version to keep one canonical entry
 
 ### 2. Import individual skills
 

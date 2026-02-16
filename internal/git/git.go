@@ -2,6 +2,8 @@ package git
 
 import (
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,23 +66,26 @@ func (m *Manager) NormalizeURL(inputURL string) URLInfo {
 	// Strip .git suffix
 	url = strings.TrimSuffix(url, ".git")
 
-	// Match tree/branch/path format (with subdirectory)
+	// Match tree/branch/path format (with subdirectory).
+	// Branch names containing "/" are supported when URL-encoded (e.g. feature%2Fabc).
 	treePathRe := regexp.MustCompile(`^(https://github\.com/[^/]+/[^/]+)/tree/([^/]+)/(.+)$`)
 	if matches := treePathRe.FindStringSubmatch(url); matches != nil {
 		pathValue := strings.TrimRight(matches[3], "/")
 		return URLInfo{
 			URL:    matches[1] + ".git",
-			Branch: matches[2],
+			Branch: decodeURLSegment(matches[2]),
 			Path:   pathValue,
 		}
 	}
 
-	// Match tree/branch format (root, no subdirectory)
-	treeBranchRe := regexp.MustCompile(`^(https://github\.com/[^/]+/[^/]+)/tree/([^/]+)$`)
+	// Match tree/branch format (root, no subdirectory).
+	// Branch names containing "/" are supported when URL-encoded (e.g. feature%2Fabc).
+	treeBranchRe := regexp.MustCompile(`^(https://github\.com/[^/]+/[^/]+)/tree/(.+)$`)
 	if matches := treeBranchRe.FindStringSubmatch(url); matches != nil {
+		branch := strings.Trim(matches[2], "/")
 		return URLInfo{
 			URL:    matches[1] + ".git",
-			Branch: matches[2],
+			Branch: decodeURLSegment(branch),
 		}
 	}
 
@@ -88,6 +93,14 @@ func (m *Manager) NormalizeURL(inputURL string) URLInfo {
 	return URLInfo{
 		URL: url + ".git",
 	}
+}
+
+func decodeURLSegment(v string) string {
+	decoded, err := url.PathUnescape(v)
+	if err != nil {
+		return v
+	}
+	return decoded
 }
 
 // GetRemoteHead returns the commit hash pointed to by a remote ref.
@@ -118,6 +131,8 @@ func (m *Manager) CloneFull(url, dest string) error {
 // CloneFullQuiet performs a full git clone with no output.
 func (m *Manager) CloneFullQuiet(url, dest string) error {
 	cmd := exec.Command("git", "clone", "--quiet", url, dest)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
 	return cmd.Run()
 }
 
@@ -143,7 +158,10 @@ func (m *Manager) cloneSparse(url, dest, subPath, branch string, quiet bool) err
 	}
 	args = append(args, url, dest)
 	cmd := exec.Command("git", args...)
-	if !quiet {
+	if quiet {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
@@ -154,6 +172,10 @@ func (m *Manager) cloneSparse(url, dest, subPath, branch string, quiet bool) err
 	// Init sparse checkout
 	cmd = exec.Command("git", "sparse-checkout", "init", "--cone")
 	cmd.Dir = dest
+	if quiet {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("sparse-checkout init failed: %w", err)
 	}
@@ -161,6 +183,10 @@ func (m *Manager) cloneSparse(url, dest, subPath, branch string, quiet bool) err
 	// Set sparse checkout path
 	cmd = exec.Command("git", "sparse-checkout", "set", subPath)
 	cmd.Dir = dest
+	if quiet {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("sparse-checkout set failed: %w", err)
 	}
@@ -172,7 +198,10 @@ func (m *Manager) cloneSparse(url, dest, subPath, branch string, quiet bool) err
 	}
 	cmd = exec.Command("git", args...)
 	cmd.Dir = dest
-	if !quiet {
+	if quiet {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+	} else {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
@@ -189,6 +218,15 @@ func (m *Manager) Pull(cwd string) error {
 	cmd.Dir = cwd
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// PullQuiet runs git pull in the given directory with suppressed output.
+func (m *Manager) PullQuiet(cwd string) error {
+	cmd := exec.Command("git", "pull", "--quiet")
+	cmd.Dir = cwd
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
 	return cmd.Run()
 }
 

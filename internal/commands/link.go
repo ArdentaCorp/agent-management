@@ -18,7 +18,11 @@ import (
 // LinkToProject is the top-level "Link to project" flow.
 // Detects tools, lets user pick one, then toggle skills.
 func LinkToProject() {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return
+	}
 	registry := skills.NewRegistry(cm)
 
 	allSkills := registry.GetAllSkills()
@@ -75,11 +79,13 @@ func LinkToProject() {
 		if len(brokenLinks) > 0 {
 			fmt.Println(tui.RenderWarning(fmt.Sprintf("Found %d broken symlink(s)", len(brokenLinks))))
 			var cleanup bool
-			huh.NewForm(huh.NewGroup(
+			if err := huh.NewForm(huh.NewGroup(
 				huh.NewConfirm().
 					Title("Remove broken symlinks?").
 					Value(&cleanup),
-			)).Run()
+			)).Run(); err != nil {
+				return
+			}
 			if cleanup {
 				for _, link := range brokenLinks {
 					os.Remove(filepath.Join(selectedProject.SkillDir, link))
@@ -157,7 +163,11 @@ func LinkToProject() {
 
 // linkSkillToProject creates a symlink from the global repo to the project.
 func linkSkillToProject(skillID string, projectInfo *project.Info) {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return
+	}
 	registry := skills.NewRegistry(cm)
 
 	skill := registry.GetSkill(skillID)
@@ -199,7 +209,11 @@ func linkSkillToProject(skillID string, projectInfo *project.Info) {
 
 // unlinkSkillFromProject removes a symlink.
 func unlinkSkillFromProject(skillID string, projectInfo *project.Info) {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return
+	}
 	linkName := cm.GetLinkName(skillID)
 	linkPath := filepath.Join(projectInfo.SkillDir, linkName)
 

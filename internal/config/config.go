@@ -30,11 +30,10 @@ type Manager struct {
 }
 
 // NewManager creates a new config manager and ensures directories exist.
-func NewManager() *Manager {
+func NewManager() (*Manager, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
 	homeDir := filepath.Join(home, ".agent-management")
@@ -43,26 +42,31 @@ func NewManager() *Manager {
 
 	// Ensure directories exist
 	if err := os.MkdirAll(homeDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: cannot create directory %s: %v\n", homeDir, err)
-		os.Exit(1)
+		return nil, fmt.Errorf("cannot create directory %s: %w", homeDir, err)
 	}
 	if err := os.MkdirAll(repoDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: cannot create directory %s: %v\n", repoDir, err)
-		os.Exit(1)
+		return nil, fmt.Errorf("cannot create directory %s: %w", repoDir, err)
 	}
 
 	// Create config file if it doesn't exist
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		cfg := Config{System: runtime.GOOS}
-		data, _ := json.MarshalIndent(cfg, "", "  ")
-		os.WriteFile(configFile, data, 0644)
+		data, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("cannot marshal default config: %w", err)
+		}
+		if err := os.WriteFile(configFile, data, 0644); err != nil {
+			return nil, fmt.Errorf("cannot write config file %s: %w", configFile, err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("cannot stat config file %s: %w", configFile, err)
 	}
 
 	return &Manager{
 		homeDir:    homeDir,
 		repoDir:    repoDir,
 		configFile: configFile,
-	}
+	}, nil
 }
 
 // GetHomeDir returns the skm home directory path.

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,7 +19,11 @@ import (
 // AddSkills is the top-level "Add skills" flow.
 // After adding, it offers to link to a detected project immediately.
 func AddSkills() {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return
+	}
 	registryURL := cm.GetRegistry()
 
 	var opts []huh.Option[string]
@@ -77,7 +82,7 @@ func offerLinkAfterAdd(addedIDs []string) {
 	}
 
 	var wantLink bool
-	huh.NewForm(
+	if err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Link these skills to a project now?").
@@ -85,7 +90,9 @@ func offerLinkAfterAdd(addedIDs []string) {
 				Negative("Not now").
 				Value(&wantLink),
 		),
-	).Run()
+	).Run(); err != nil {
+		return
+	}
 
 	if !wantLink {
 		return
@@ -107,14 +114,16 @@ func offerLinkAfterAdd(addedIDs []string) {
 		opts = append(opts, huh.NewOption(p.Type, i))
 	}
 	var idx int
-	huh.NewForm(
+	if err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[int]().
 				Title("Which tool?").
 				Options(opts...).
 				Value(&idx),
 		),
-	).Run()
+	).Run(); err != nil {
+		return
+	}
 
 	if idx == -1 {
 		// Link to all detected tools
@@ -125,6 +134,9 @@ func offerLinkAfterAdd(addedIDs []string) {
 			}
 		}
 	} else {
+		if idx < 0 || idx >= len(projects) {
+			return
+		}
 		p := projects[idx]
 		for _, id := range addedIDs {
 			linkSkillToProject(id, &p)
@@ -134,7 +146,11 @@ func offerLinkAfterAdd(addedIDs []string) {
 
 // addGitHubSkill adds a skill from a GitHub URL. Returns added skill IDs.
 func addGitHubSkill() []string {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return nil
+	}
 	registry := skills.NewRegistry(cm)
 	gitMgr := git.NewManager()
 
@@ -197,11 +213,13 @@ func addSingleGitHubSkill(cm *config.Manager, registry *skills.Registry, gitMgr 
 
 	if existing := registry.GetSkill(id); existing != nil {
 		var overwrite bool
-		huh.NewForm(huh.NewGroup(
+		if err := huh.NewForm(huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("%s already exists. Overwrite?", id)).
 				Value(&overwrite),
-		)).Run()
+		)).Run(); err != nil {
+			return nil
+		}
 		if !overwrite {
 			return nil
 		}
@@ -215,9 +233,9 @@ func addSingleGitHubSkill(cm *config.Manager, registry *skills.Registry, gitMgr 
 
 	var err error
 	if gitInfo.Path != "" {
-		err = gitMgr.CloneSparse(gitInfo.URL, destPath, gitInfo.Path, branch)
+		err = gitMgr.CloneSparseQuiet(gitInfo.URL, destPath, gitInfo.Path, branch)
 	} else {
-		err = gitMgr.CloneFull(gitInfo.URL, destPath)
+		err = gitMgr.CloneFullQuiet(gitInfo.URL, destPath)
 	}
 	if err != nil {
 		fmt.Println(tui.RenderError("Failed to clone: " + err.Error()))
@@ -263,7 +281,6 @@ func addGitHubSkillsFolder(cm *config.Manager, registry *skills.Registry, gitMgr
 
 	type skillEntry struct {
 		name string
-		path string
 	}
 	var found []skillEntry
 
@@ -278,7 +295,7 @@ func addGitHubSkillsFolder(cm *config.Manager, registry *skills.Registry, gitMgr
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(scanRoot, entry.Name(), "SKILL.md")); err == nil {
-			found = append(found, skillEntry{name: entry.Name(), path: filepath.Join(scanRoot, entry.Name())})
+			found = append(found, skillEntry{name: entry.Name()})
 		}
 	}
 
@@ -303,12 +320,14 @@ func addGitHubSkillsFolder(cm *config.Manager, registry *skills.Registry, gitMgr
 	}
 
 	var selected []string
-	huh.NewForm(huh.NewGroup(
+	if err := huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().
 			Title(fmt.Sprintf("Found %d skills — select which to add", len(found))).
 			Options(opts...).
 			Value(&selected),
-	)).Run()
+	)).Run(); err != nil {
+		return nil
+	}
 
 	if len(selected) == 0 {
 		fmt.Println(tui.MutedText.Render("No skills selected."))
@@ -341,11 +360,13 @@ func addGitHubSkillsFolder(cm *config.Manager, registry *skills.Registry, gitMgr
 
 		if existing := registry.GetSkill(id); existing != nil {
 			var overwrite bool
-			huh.NewForm(huh.NewGroup(
+			if err := huh.NewForm(huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("%s already exists. Overwrite?", id)).
 					Value(&overwrite),
-			)).Run()
+			)).Run(); err != nil {
+				continue
+			}
 			if !overwrite {
 				continue
 			}
@@ -353,14 +374,15 @@ func addGitHubSkillsFolder(cm *config.Manager, registry *skills.Registry, gitMgr
 		}
 
 		destPath := cm.GetRepoPath(id)
-		fmt.Println(tui.RenderInfo("Copying " + match.name + "..."))
-		if err := copyDir(match.path, destPath); err != nil {
-			fmt.Println(tui.RenderError("Failed: " + match.name + ": " + err.Error()))
+		os.MkdirAll(filepath.Dir(destPath), 0755)
+		fmt.Println(tui.RenderInfo("Cloning " + match.name + "..."))
+		if err := gitMgr.CloneSparseQuiet(gitInfo.URL, destPath, skillSubPath, branch); err != nil {
+			fmt.Println(tui.RenderError("Failed to clone " + match.name + ": " + err.Error()))
 			continue
 		}
 
-		commitID, _ := gitMgr.GetLocalPathCommitID(tmpDir, skillSubPath)
-		registry.AddSkill(id, "github", commitID, "")
+		commitID, _ := gitMgr.GetLocalPathCommitID(destPath, skillSubPath)
+		registry.AddSkill(id, "github", commitID, skillSubPath)
 		addedIDs = append(addedIDs, id)
 		fmt.Println(tui.RenderSuccess("Added " + id))
 	}
@@ -373,7 +395,11 @@ func addGitHubSkillsFolder(cm *config.Manager, registry *skills.Registry, gitMgr
 
 // addSkillsFolder scans a directory and lets the user pick skills. Returns added IDs.
 func addSkillsFolder() []string {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return nil
+	}
 	registry := skills.NewRegistry(cm)
 
 	var inputPath string
@@ -437,12 +463,14 @@ func addSkillsFolder() []string {
 	}
 
 	var selected []string
-	huh.NewForm(huh.NewGroup(
+	if err := huh.NewForm(huh.NewGroup(
 		huh.NewMultiSelect[string]().
 			Title(fmt.Sprintf("Found %d skills — select which to add", len(found))).
 			Options(opts...).
 			Value(&selected),
-	)).Run()
+	)).Run(); err != nil {
+		return nil
+	}
 
 	if len(selected) == 0 {
 		fmt.Println(tui.MutedText.Render("No skills selected."))
@@ -466,11 +494,13 @@ func addSkillsFolder() []string {
 
 		if existing := registry.GetSkill(id); existing != nil {
 			var overwrite bool
-			huh.NewForm(huh.NewGroup(
+			if err := huh.NewForm(huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("%s already exists. Overwrite?", id)).
 					Value(&overwrite),
-			)).Run()
+			)).Run(); err != nil {
+				continue
+			}
 			if !overwrite {
 				continue
 			}
@@ -538,15 +568,34 @@ func copyDir(src, dst string) error {
 				return err
 			}
 		} else {
-			data, err := os.ReadFile(srcPath)
+			info, err := entry.Info()
 			if err != nil {
 				return err
 			}
-			info, _ := entry.Info()
-			if err := os.WriteFile(dstPath, data, info.Mode()); err != nil {
+			if err := copyFile(srcPath, dstPath, info.Mode()); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func copyFile(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+
+	return out.Close()
 }

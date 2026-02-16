@@ -15,7 +15,11 @@ import (
 // ManageSkills is the top-level "Manage skills" flow.
 // Shows all installed skills, lets user update/delete.
 func ManageSkills() {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return
+	}
 	registry := skills.NewRegistry(cm)
 
 	for {
@@ -87,12 +91,14 @@ func manageOneSkill(skill skills.Skill) {
 	)
 
 	var action string
-	huh.NewForm(huh.NewGroup(
+	if err := huh.NewForm(huh.NewGroup(
 		huh.NewSelect[string]().
 			Title("Action").
 			Options(opts...).
 			Value(&action),
-	)).Run()
+	)).Run(); err != nil {
+		return
+	}
 
 	switch action {
 	case "update":
@@ -110,7 +116,10 @@ type updateInfo struct {
 }
 
 func checkForUpdate(skill skills.Skill) *updateInfo {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		return nil
+	}
 	gitMgr := git.NewManager()
 
 	parts := strings.SplitN(skill.ID, ":", 2)
@@ -153,14 +162,18 @@ func checkForUpdate(skill skills.Skill) *updateInfo {
 }
 
 func doUpdate(skill skills.Skill, info updateInfo) {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return
+	}
 	registry := skills.NewRegistry(cm)
 	gitMgr := git.NewManager()
 
 	fmt.Println(tui.RenderInfo("Updating " + skill.ID + "..."))
 	destPath := cm.GetRepoPath(skill.ID)
 
-	if err := gitMgr.Pull(destPath); err != nil {
+	if err := gitMgr.PullQuiet(destPath); err != nil {
 		fmt.Println(tui.RenderError("Failed: " + err.Error()))
 		return
 	}
@@ -170,17 +183,24 @@ func doUpdate(skill skills.Skill, info updateInfo) {
 }
 
 func doDelete(id string) {
-	cm := config.NewManager()
+	cm, err := config.NewManager()
+	if err != nil {
+		fmt.Println(tui.RenderError("Failed to initialize config: " + err.Error()))
+		return
+	}
 	registry := skills.NewRegistry(cm)
 
 	var confirm bool
-	huh.NewForm(huh.NewGroup(
+	if err := huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
 			Title(fmt.Sprintf("Delete %s? This cannot be undone.", id)).
 			Affirmative("Yes, delete").
 			Negative("Cancel").
 			Value(&confirm),
-	)).Run()
+	)).Run(); err != nil {
+		fmt.Println(tui.MutedText.Render("Cancelled."))
+		return
+	}
 
 	if !confirm {
 		fmt.Println(tui.MutedText.Render("Cancelled."))

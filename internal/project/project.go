@@ -36,10 +36,11 @@ func NewDetector(cwd string) *Detector {
 		cwd, _ = os.Getwd()
 	}
 
-	cm := config.NewManager()
-	aiTools := cm.GetAITools()
-	if aiTools == nil {
-		aiTools = DefaultAITools
+	aiTools := DefaultAITools
+	if cm, err := config.NewManager(); err == nil {
+		if cfgTools := cm.GetAITools(); cfgTools != nil {
+			aiTools = cfgTools
+		}
 	}
 
 	return &Detector{
